@@ -43,9 +43,27 @@ class Player {
 
         this.shootInterval = 300; // milliseconds
         this.lastShotTime = 0;
+        this.isShooting = false; // For autofire
+
+        // Aura properties
+        this.auraRadius = this.width / 2 * 1.5;
+        this.auraColor = 'rgba(100, 100, 255, 0.3)';
+        this.auraPulseSpeed = 0.05; // Speed of pulse
+        this.auraCurrentRadius = this.auraRadius;
+        this.auraPulseDirection = 1; // 1 for expanding, -1 for contracting
     }
 
     draw(ctx) {
+        // Draw aura if absorbing and not invincible
+        if (!this.isShooting && !this.invincible) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.auraCurrentRadius, 0, Math.PI * 2);
+            ctx.fillStyle = this.auraColor;
+            ctx.fill();
+            ctx.restore();
+        }
+
         // Draw trail first
         // Loop from end to start for correct layering (older segments drawn first)
         for (let i = this.trail.length - 1; i >= 0; i--) {
@@ -102,6 +120,28 @@ class Player {
         }
         // Note: prevX and prevY are not updated here, they are part of the mousemove logic
         // to capture position *before* the update from that event.
+
+        // Update Aura Logic
+        if (!this.isShooting) {
+            const pulseMagnitude = this.auraPulseSpeed * (this.width / 2 * 0.5);
+            this.auraCurrentRadius += this.auraPulseDirection * pulseMagnitude;
+
+            const maxAura = this.width / 2 * 1.8;
+            const minAura = this.width / 2 * 1.2;
+
+            if (this.auraCurrentRadius > maxAura) {
+                this.auraCurrentRadius = maxAura;
+                this.auraPulseDirection *= -1;
+            } else if (this.auraCurrentRadius < minAura) {
+                this.auraCurrentRadius = minAura;
+                this.auraPulseDirection *= -1;
+            }
+        } else {
+            // Optionally reset aura when shooting, or let it stay as is (it won't be drawn)
+            // For simplicity, let's reset it so it starts fresh when absorption mode resumes.
+            this.auraCurrentRadius = this.auraRadius;
+            this.auraPulseDirection = 1;
+        }
     }
 }
 
@@ -370,9 +410,10 @@ function resetGame() {
         player.prevX = player.x; // Reset prev positions to current
         player.prevY = player.y;
         player.lastShotTime = 0; // Reset last shot time
+        player.isShooting = false; // Reset shooting state
     } else if (playerImage && playerImage.complete) { // If player was null but image loaded
          player = new Player(canvas.width / 2, canvas.height - 100, 80, 80, playerImage);
-         // Player constructor already initializes trail, prevX, prevY, shootInterval, lastShotTime
+         // Player constructor already initializes trail, prevX, prevY, shootInterval, lastShotTime, isShooting
     }
 
 
@@ -397,7 +438,28 @@ function update() { // timestamp can be passed for deltaTime
     }
 
     if (player) {
-        player.update(); // Pass deltaTime if using it
+        player.update(); // Handles invincibility, trail fading
+
+        // Autofire logic
+        if (player.isShooting && !gameOver) {
+            const currentTime = Date.now();
+            if (currentTime - player.lastShotTime > player.shootInterval) {
+                const bulletSpeed = 12;
+                const bulletWidth = 8;
+                const bulletHeight = 15;
+                const bulletColor = '#ADD8E6'; // Lightblue
+
+                const bulletX = player.x - bulletWidth / 2;
+                const bulletY = player.y - player.height / 2 - bulletHeight;
+
+                bullets.push(new Bullet(
+                    bulletX, bulletY, bulletWidth, bulletHeight, bulletColor,
+                    bulletSpeed, 0, -bulletSpeed, 'player'
+                ));
+                player.lastShotTime = currentTime;
+                // console.log("Player autofired. Total bullets:", bullets.length);
+            }
+        }
     }
 
     // Update enemies
@@ -463,45 +525,75 @@ function update() { // timestamp can be passed for deltaTime
     }
 
 
-    if (player && !player.invincible) {
+    if (player) { // Player related collisions
         // Player-Enemy Bullet Collision
-        for (let i = bullets.length - 1; i >= 0; i--) { // Re-iterate bullets as some might have been removed
+        for (let i = bullets.length - 1; i >= 0; i--) {
             const bullet = bullets[i];
             if (bullet.type === 'enemy') {
                 // Player's x,y is center. Bullet's x,y is top-left. checkCollision handles this.
-                if (checkCollision(player, bullet)) { 
-                    lives--;
-                    updateLivesDisplay();
-                    bullets.splice(i, 1); // Remove bullet
-                    player.invincible = true;
-                    player.invincibilityTimer = player.invincibleDuration;
-                    console.log("Player hit by enemy bullet. Lives:", lives);
+                if (checkCollision(player, bullet)) {
+                    if (player.isShooting === false) { // Player is absorbing
+                        bullets.splice(i, 1); // Remove (absorb) the bullet
+                        console.log("Enemy bullet absorbed by player.");
+                        // Optional future enhancements: absorption effect, score bonus
+                    } else { // Player is shooting, so take damage if not invincible
+                        if (!player.invincible) {
+                            lives--;
+                            updateLivesDisplay();
+                            bullets.splice(i, 1); // Remove bullet
+                            player.invincible = true;
+                            player.invincibilityTimer = player.invincibleDuration;
+                            console.log("Player hit by enemy bullet while shooting. Lives:", lives);
 
-                    if (lives <= 0) {
-                        gameOver = true;
-                        showGameOverScreen();
-                        console.log("Game Over - player hit by bullet.");
-                        break; 
+                            if (lives <= 0) {
+                                gameOver = true;
+                                showGameOverScreen();
+                                console.log("Game Over - player hit by bullet while shooting.");
+                                break; // Exit bullet loop as game is over
+                            }
+                        } else {
+                            // If player is invincible and shooting, bullet might pass through or be destroyed
+                            // For now, let's assume invincible player (even if shooting) still removes bullet but takes no damage
+                            bullets.splice(i, 1);
+                            console.log("Enemy bullet hit invincible (and shooting) player, bullet removed.");
+                        }
                     }
                 }
             }
         }
 
-        if (gameOver) return;
+        if (gameOver) return; // Stop further collision checks if game over
 
-        // Player-Enemy Collision (player is not invincible)
-        for (let i = enemies.length - 1; i >= 0; i--) {
-            const enemy = enemies[i];
-             // Player's x,y is center. Enemy's x,y is top-left. checkCollision handles this.
-            if (checkCollision(player, enemy)) {
-                createExplosion(enemy.x + enemy.width / 2, enemy.y + enemy.height / 2, 'orange');
-                enemies.splice(i, 1); 
-                score += 10; 
-                updateScoreDisplay();
-                console.log("Player collided with enemy, enemy destroyed. Score:", score);
+        // Player-Enemy Collision (only if player is not invincible, regardless of shooting state)
+        // The original logic for player-enemy collision (no damage to player) should remain.
+        // The !player.invincible check for this interaction type might be redundant if player-enemy collision *never* grants invincibility.
+        // However, keeping it is safer if other mechanics might grant invincibility.
+        // The subtask only changed player-bullet interaction based on isShooting.
+        // Player-enemy direct collision still just destroys enemy and gives score.
+        // The `!player.invincible` was part of the surrounding block, let's ensure it's logically placed.
+        // If player is invincible, they shouldn't interact with enemies directly either (e.g. destroy them by touch).
+        // Or, they should, but not take damage. Current setup: destroy enemy, no damage. This is fine.
+        // The condition `if (player && !player.invincible)` was for the whole block of player taking damage.
+        // Now, player-enemy collision doesn't cause damage, so it can happen even if invincible.
+        // Let's move the player-enemy collision outside the !player.invincible check for taking damage,
+        // but it should still check if player exists.
+
+        // Player-Enemy Collision (Player destroys enemy on contact, no damage to player)
+        if (!gameOver) { // Check !gameOver again before this loop
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                const enemy = enemies[i];
+                // Player's x,y is center. Enemy's x,y is top-left. checkCollision handles this.
+                if (checkCollision(player, enemy)) {
+                    createExplosion(enemy.x + enemy.width / 2, enemy.y + enemy.height / 2, 'orange');
+                    enemies.splice(i, 1);
+                    score += 10;
+                    updateScoreDisplay();
+                    console.log("Player collided with enemy, enemy destroyed. Score:", score);
+                    // No damage to player, no invincibility from this type of collision.
+                }
             }
         }
-    }
+    } // End of 'if (player)' block
 }
 
 
@@ -593,35 +685,16 @@ canvas.addEventListener('mousemove', (event) => {
     }
 });
 
-// Player Shooting Input
+// Player Autofire Input
 canvas.addEventListener('mousedown', (event) => {
-    if (player && !gameOver) {
-        const currentTime = Date.now();
-        if (currentTime - player.lastShotTime > player.shootInterval) {
-            const bulletSpeed = 12; // Increased speed for player bullets
-            const bulletWidth = 8;
-            const bulletHeight = 15;
-            const bulletColor = '#ADD8E6'; // Lightblue
+    if (player && !gameOver) { // Check !gameOver here too, though update loop also checks
+        player.isShooting = true;
+    }
+});
 
-            // Spawn bullet from the top-center of the player
-            // Player x,y is center. Bullet x,y is top-left.
-            const bulletX = player.x - bulletWidth / 2;
-            const bulletY = player.y - player.height / 2 - bulletHeight; // Spawn above player
-
-            bullets.push(new Bullet(
-                bulletX,
-                bulletY,
-                bulletWidth,
-                bulletHeight,
-                bulletColor,
-                bulletSpeed,
-                0, // velocityX
-                -bulletSpeed, // velocityY (negative for upwards)
-                'player' // type
-            ));
-            player.lastShotTime = currentTime;
-            console.log("Player fired. Total bullets:", bullets.length);
-        }
+window.addEventListener('mouseup', (event) => { // Listen on window for robust release
+    if (player) {
+        player.isShooting = false;
     }
 });
 
