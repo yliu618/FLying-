@@ -18,6 +18,9 @@ let enemyImage = null;
 let imagesToLoad = 2;
 let imagesLoaded = 0;
 
+let defaultEnemyWidth = 60; // Fallback width
+let defaultEnemyHeight = 60; // Fallback height
+
 let lastEnemySpawnTime = 0;
 const enemySpawnInterval = 2000; // milliseconds
 let lastTime = 0; // For deltaTime, though not fully implemented for invincibility timer yet
@@ -293,8 +296,11 @@ function onImageLoad() {
     imagesLoaded++;
     if (imagesLoaded === imagesToLoad) {
         console.log("All images loaded.");
-        player = new Player(canvas.width / 2, canvas.height - 100, 80, 80, playerImage);
-        console.log("Player object created with image:", player);
+        // Use naturalWidth and naturalHeight from the loaded image
+        // Adjust Y to position center of player 50px from the bottom
+        const initialPlayerY = canvas.height - playerImage.naturalHeight / 2 - 50;
+        player = new Player(canvas.width / 2, initialPlayerY, playerImage.naturalWidth, playerImage.naturalHeight, playerImage);
+        console.log("Player object created with image (natural dimensions):", player);
         resetGame(); // Initialize game state properly including player position
     }
 }
@@ -308,27 +314,36 @@ function loadImages() {
 
     enemyImage = new Image();
     enemyImage.src = 'enemy.png';
-    enemyImage.onload = () => { console.log("Enemy image loaded."); onImageLoad(); };
-    enemyImage.onerror = () => { console.error("Error loading enemy.png."); onImageLoad(); };
+    enemyImage.onload = () => { 
+        console.log("Enemy image loaded."); 
+        if (enemyImage.naturalWidth > 0 && enemyImage.naturalHeight > 0) {
+            defaultEnemyWidth = enemyImage.naturalWidth;
+            defaultEnemyHeight = enemyImage.naturalHeight;
+            console.log(`Enemy dimensions set to: ${defaultEnemyWidth}x${defaultEnemyHeight}`);
+        } else {
+            console.warn("Enemy image loaded but has 0 dimensions. Using fallback dimensions.");
+        }
+        onImageLoad(); 
+    };
+    enemyImage.onerror = () => { 
+        console.error("Error loading enemy.png. Using fallback dimensions."); 
+        onImageLoad(); 
+    };
 }
 loadImages();
 
 // --- Enemy Spawning ---
 function spawnEnemy() {
-    if (!enemyImage) {
-        // console.warn("Enemy image not fully loaded or error, placeholder will be used.");
-    }
-    const enemyWidth = 60;
-    const enemyHeight = 60;
-    // Spawn at a random X, ensuring initialX is set for S-curve
-    const spawnX = Math.random() * (canvas.width - enemyWidth); // This is initialX (top-left)
+    // enemyImage object is passed, Enemy class constructor handles placeholder if image not loaded/valid
+    // Use defaultEnemyWidth/Height which are updated on image load.
+    const spawnX = Math.random() * (canvas.width - defaultEnemyWidth); 
 
     const newEnemy = new Enemy(
         spawnX,
-        -enemyHeight,
-        enemyWidth,
-        enemyHeight,
-        enemyImage,
+        -defaultEnemyHeight, // Start off-screen using the dynamic height
+        defaultEnemyWidth,
+        defaultEnemyHeight,
+        enemyImage, // Pass the image object itself
         2, 50, 0.05
     );
     enemies.push(newEnemy);
@@ -403,7 +418,10 @@ function resetGame() {
 
     if (player) {
         player.x = canvas.width / 2;
-        player.y = canvas.height - 100;
+        // When resetting, player.height should be set from naturalHeight already
+        // If player.height could change, use playerImage.naturalHeight if available and loaded
+        const resetPlayerY = canvas.height - (player.height / 2) - 50; 
+        player.y = resetPlayerY;
         player.invincible = false;
         player.invincibilityTimer = 0;
         player.trail = []; // Reset trail
@@ -411,9 +429,10 @@ function resetGame() {
         player.prevY = player.y;
         player.lastShotTime = 0; // Reset last shot time
         player.isShooting = false; // Reset shooting state
-    } else if (playerImage && playerImage.complete) { // If player was null but image loaded
-         player = new Player(canvas.width / 2, canvas.height - 100, 80, 80, playerImage);
-         // Player constructor already initializes trail, prevX, prevY, shootInterval, lastShotTime, isShooting
+    } else if (playerImage && playerImage.complete && playerImage.naturalWidth > 0) { // If player was null but image loaded & valid
+         const initialPlayerY = canvas.height - playerImage.naturalHeight / 2 - 50;
+         player = new Player(canvas.width / 2, initialPlayerY, playerImage.naturalWidth, playerImage.naturalHeight, playerImage);
+         // Player constructor already initializes other properties
     }
 
 
