@@ -47,13 +47,17 @@ class Player {
         this.shootInterval = 300; // milliseconds
         this.lastShotTime = 0;
         this.isShooting = false; // For autofire
+        this.bigBulletCharges = 0;
 
         // Aura properties
-        this.auraRadius = this.width / 2 * 1.5;
+        this.auraRadius = this.width / 2 * 1.5; // Base for pulsing aura visual
         this.auraColor = 'rgba(100, 100, 255, 0.3)';
         this.auraPulseSpeed = 0.05; // Speed of pulse
-        this.auraCurrentRadius = this.auraRadius;
+        this.auraCurrentRadius = this.auraRadius; // For visual pulsing
         this.auraPulseDirection = 1; // 1 for expanding, -1 for contracting
+
+        // Actual absorption mechanic radius
+        this.absorptionRadius = this.width * 1.5; // Player's actual absorption field radius
     }
 
     draw(ctx) {
@@ -163,6 +167,7 @@ class Enemy {
         this.angle = Math.random() * Math.PI * 2;
         this.shootInterval = 1500 + Math.random() * 1000;
         this.lastShotTime = Date.now();
+        this.health = 10; // Default health
     }
 
     draw(ctx) {
@@ -198,7 +203,7 @@ class Enemy {
 
 // --- Bullet Class ---
 class Bullet {
-    constructor(x, y, width, height, color, speed, velocityX, velocityY, type = 'enemy') { // Added type, defaults to 'enemy'
+    constructor(x, y, width, height, color, speed, velocityX, velocityY, type = 'enemy', trailColor, damage = 1) {
         this.x = x; // Top-left x
         this.y = y; // Top-left y
         this.width = width;
@@ -208,12 +213,8 @@ class Bullet {
         this.velocityX = velocityX;
         this.velocityY = velocityY;
         this.type = type; // 'enemy' or 'player'
-        // Set trailColor based on type
-        if (this.type === 'player') {
-            this.trailColor = 'rgba(173, 216, 230, 0.5)'; // Lightblue trail for player
-        } else { // enemy
-            this.trailColor = 'rgba(200, 0, 255, 0.3)'; // Purple trail for enemy
-        }
+        this.trailColor = trailColor; // Explicitly passed
+        this.damage = damage; // Damage value for the bullet
     }
 
     draw(ctx) {
@@ -429,15 +430,17 @@ function resetGame() {
         player.prevY = player.y;
         player.lastShotTime = 0; // Reset last shot time
         player.isShooting = false; // Reset shooting state
+        player.bigBulletCharges = 0; // Reset charges
     } else if (playerImage && playerImage.complete && playerImage.naturalWidth > 0) { // If player was null but image loaded & valid
          const initialPlayerY = canvas.height - playerImage.naturalHeight / 2 - 50;
          player = new Player(canvas.width / 2, initialPlayerY, playerImage.naturalWidth, playerImage.naturalHeight, playerImage);
-         // Player constructor already initializes other properties
+         // Player constructor already initializes other properties including bigBulletCharges
     }
 
 
     updateScoreDisplay();
     updateLivesDisplay();
+    updateBigBulletChargesDisplay(); // Initialize charges display
     gameOverScreen.style.display = 'none';
     lastEnemySpawnTime = Date.now(); // Reset enemy spawn timer
     // gameLoop will continue running, or requestAnimationFrame will pick it up
@@ -463,20 +466,44 @@ function update() { // timestamp can be passed for deltaTime
         if (player.isShooting && !gameOver) {
             const currentTime = Date.now();
             if (currentTime - player.lastShotTime > player.shootInterval) {
-                const bulletSpeed = 12;
-                const bulletWidth = 8;
-                const bulletHeight = 15;
-                const bulletColor = '#ADD8E6'; // Lightblue
+                let bulletWidth, bulletHeight, bulletColor, bulletDamage, bulletTrailColor;
+                const bulletSpeed = 12; // Common speed for player bullets
 
+                if (player.bigBulletCharges > 0) {
+                    bulletWidth = 24; 
+                    bulletHeight = 45; 
+                    bulletColor = '#FFD700'; // Gold color for big bullet
+                    bulletDamage = 5; // Big bullet damage
+                    bulletTrailColor = 'rgba(255, 215, 0, 0.6)'; // Gold trail
+                    player.bigBulletCharges--;
+                    updateBigBulletChargesDisplay(); 
+                } else {
+                    bulletWidth = 8;
+                    bulletHeight = 15;
+                    bulletColor = '#ADD8E6'; // Lightblue for normal
+                    bulletDamage = 2; // Normal bullet damage
+                    bulletTrailColor = 'rgba(173, 216, 230, 0.5)'; // Lightblue trail
+                }
+
+                // Bullet's x,y is top-left. Player's x,y is center.
+                // Spawn from player's top-center edge.
                 const bulletX = player.x - bulletWidth / 2;
-                const bulletY = player.y - player.height / 2 - bulletHeight;
+                const bulletY = player.y - player.height / 2 - bulletHeight; 
 
                 bullets.push(new Bullet(
-                    bulletX, bulletY, bulletWidth, bulletHeight, bulletColor,
-                    bulletSpeed, 0, -bulletSpeed, 'player'
+                    bulletX,
+                    bulletY,
+                    bulletWidth,
+                    bulletHeight,
+                    bulletColor,
+                    bulletSpeed,
+                    0,  // velocityX
+                    -bulletSpeed, // velocityY (negative for upwards)
+                    'player',
+                    bulletTrailColor,
+                    bulletDamage 
                 ));
                 player.lastShotTime = currentTime;
-                // console.log("Player autofired. Total bullets:", bullets.length);
             }
         }
     }
@@ -531,13 +558,22 @@ function update() { // timestamp can be passed for deltaTime
                     bulletRect.y < enemyRect.y + enemyRect.height &&
                     bulletRect.y + bulletRect.height > enemyRect.y) {
                     
-                    createExplosion(enemy.x + enemy.width / 2, enemy.y + enemy.height / 2, 'orange');
-                    enemies.splice(j, 1);
-                    bullets.splice(i, 1);
-                    score += 20; // Different score for shooting down
-                    updateScoreDisplay();
-                    console.log("Enemy hit by player bullet. Score:", score);
-                    break; // Bullet is gone, no need to check other enemies for this bullet
+                    // const bulletDamage = bullet.damage || 2; // Old line
+                    const bulletDamage = bullet.damage; // Player bullets now always have damage
+                    enemy.health -= bulletDamage;
+                    bullets.splice(i, 1); // Remove bullet after processing damage
+
+                    if (enemy.health <= 0) {
+                        createExplosion(enemy.x + enemy.width / 2, enemy.y + enemy.height / 2, 'orange');
+                        enemies.splice(j, 1);
+                        score += 20; // Score for destroying enemy
+                        updateScoreDisplay();
+                        console.log("Enemy destroyed by player bullet. Score:", score);
+                    } else {
+                        console.log(`Enemy hit, health remaining: ${enemy.health}`);
+                        // Optional: Add a visual hit effect to the enemy here
+                    }
+                    break; // Bullet is consumed, stop checking this bullet against other enemies
                 }
             }
         }
@@ -548,18 +584,53 @@ function update() { // timestamp can be passed for deltaTime
         // Player-Enemy Bullet Collision
         for (let i = bullets.length - 1; i >= 0; i--) {
             const bullet = bullets[i];
-            if (bullet.type === 'enemy') {
-                // Player's x,y is center. Bullet's x,y is top-left. checkCollision handles this.
+            let absorbedOrDestroyedThisFrame = false;
+
+            if (bullet.type === 'enemy' && !gameOver) { // Ensure player and game not over for processing
+                const dxToPlayer = player.x - (bullet.x + bullet.width / 2); // Distance to bullet center
+                const dyToPlayer = player.y - (bullet.y + bullet.height / 2); // Distance to bullet center
+                const distanceToPlayerCenter = Math.sqrt(dxToPlayer * dxToPlayer + dyToPlayer * dyToPlayer);
+
+                if (!player.isShooting && distanceToPlayerCenter < player.absorptionRadius) {
+                    // Player is absorbing and bullet is within the larger absorption radius
+                    const distanceToPlayerEdge = Math.max(0, distanceToPlayerCenter - (player.width / 2)); // Approx distance to player's collision edge
+                    const normalizedDistance = distanceToPlayerEdge / (player.absorptionRadius - (player.width / 2)); // 0 at edge, 1 at absorption radius edge
+
+                    const maxAccelerationFactor = 2; 
+                    const accelerationFactor = maxAccelerationFactor * Math.max(0, (1 - normalizedDistance)); // Ensure factor is not negative
+
+                    const pullSpeed = 1 + accelerationFactor;
+                    
+                    if (distanceToPlayerCenter > 0) { // Avoid division by zero if bullet is exactly at player center
+                        bullet.velocityX += (dxToPlayer / distanceToPlayerCenter) * pullSpeed;
+                        bullet.velocityY += (dyToPlayer / distanceToPlayerCenter) * pullSpeed;
+                    }
+
+
+                    const maxBulletSpeed = 15; 
+                    const currentBulletSpeed = Math.sqrt(bullet.velocityX * bullet.velocityX + bullet.velocityY * bullet.velocityY);
+                    if (currentBulletSpeed > maxBulletSpeed) {
+                        bullet.velocityX = (bullet.velocityX / currentBulletSpeed) * maxBulletSpeed;
+                        bullet.velocityY = (bullet.velocityY / currentBulletSpeed) * maxBulletSpeed;
+                    }
+                }
+
+                // Now, check for actual collision with player's strict hitbox
+                // checkCollision expects player (center x,y) and bullet (top-left x,y)
                 if (checkCollision(player, bullet)) {
-                    if (player.isShooting === false) { // Player is absorbing
-                        bullets.splice(i, 1); // Remove (absorb) the bullet
-                        console.log("Enemy bullet absorbed by player.");
-                        // Optional future enhancements: absorption effect, score bonus
+                    if (!player.isShooting) { // Absorbing mode
+                        bullets.splice(i, 1); 
+                        absorbedOrDestroyedThisFrame = true;
+                        player.bigBulletCharges++;
+                        updateBigBulletChargesDisplay();
+                        console.log("Enemy bullet absorbed by player. Charges:", player.bigBulletCharges);
+                        // No invincibility or damage when absorbing
                     } else { // Player is shooting, so take damage if not invincible
                         if (!player.invincible) {
                             lives--;
                             updateLivesDisplay();
-                            bullets.splice(i, 1); // Remove bullet
+                            bullets.splice(i, 1); 
+                            absorbedOrDestroyedThisFrame = true;
                             player.invincible = true;
                             player.invincibilityTimer = player.invincibleDuration;
                             console.log("Player hit by enemy bullet while shooting. Lives:", lives);
@@ -568,16 +639,23 @@ function update() { // timestamp can be passed for deltaTime
                                 gameOver = true;
                                 showGameOverScreen();
                                 console.log("Game Over - player hit by bullet while shooting.");
-                                break; // Exit bullet loop as game is over
+                                // break; // Exit bullet loop as game is over - handled by absorbedOrDestroyedThisFrame check below
                             }
                         } else {
-                            // If player is invincible and shooting, bullet might pass through or be destroyed
-                            // For now, let's assume invincible player (even if shooting) still removes bullet but takes no damage
+                            // Player is shooting AND invincible: bullet hits shield, remove bullet
                             bullets.splice(i, 1);
+                            absorbedOrDestroyedThisFrame = true;
                             console.log("Enemy bullet hit invincible (and shooting) player, bullet removed.");
                         }
                     }
                 }
+            }
+            // If bullet was absorbed/destroyed, it's already removed.
+            // If not, and it's still in the bullets array, then its standard update happens next (outside this block).
+            // The bullet.update() which includes its own movement and trail particle generation should still run if not absorbed.
+            // The `continue` is not strictly necessary due to splice, but to be absolutely clear:
+            if (absorbedOrDestroyedThisFrame) {
+                continue; // Go to the next bullet in the main bullet loop
             }
         }
 
@@ -649,11 +727,12 @@ function gameLoop(timestamp) { // timestamp is provided by requestAnimationFrame
 // 6. Initial DOM Element References
 const scoreDisplay = document.getElementById('score');
 const livesDisplay = document.getElementById('lives');
+const chargesDisplay = document.getElementById('charges'); // Reference for charges UI
 const gameOverScreenElement = document.getElementById('game-over-screen'); // Renamed for clarity
 const finalScoreDisplay = document.getElementById('final-score');
 const restartButton = document.getElementById('restart-button');
 
-// 7. Score and Lives Update Functions
+// 7. Score, Lives, and Charges Update Functions
 function updateScoreDisplay() {
     scoreDisplay.textContent = `Score: ${score}`;
 }
@@ -661,6 +740,14 @@ function updateScoreDisplay() {
 function updateLivesDisplay() {
     if (livesDisplay) {
         livesDisplay.textContent = Array(lives > 0 ? lives : 0).fill('❤️').join('');
+    }
+}
+
+function updateBigBulletChargesDisplay() {
+    if (chargesDisplay && player) { // Ensure player exists
+        chargesDisplay.textContent = 'Charges: ' + player.bigBulletCharges;
+    } else if (chargesDisplay) { // If player doesn't exist yet (e.g. initial setup)
+        chargesDisplay.textContent = 'Charges: 0';
     }
 }
 
